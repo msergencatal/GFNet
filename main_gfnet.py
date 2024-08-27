@@ -24,9 +24,11 @@ from samplers import RASampler
 import utils
 from gfnet import GFNet, GFNetPyramid
 
+# Suppress specific warning messages
 import warnings
 warnings.filterwarnings("ignore", message="Argument interpolation should be")
 
+# Each argument is configured to allow users to customize various aspects of the training process.
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
     parser.add_argument('--batch-size', default=64, type=int)
