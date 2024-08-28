@@ -171,13 +171,18 @@ def get_args_parser():
 
 
 def main(args):
+    # Initializes the distributed training mode based on the provided arguments in args.
     utils.init_distributed_mode(args)
 
+    # The line print(args) outputs the current state of the args object, which contains all the command-line arguments and their values 
+    # that were passed when the script was executed.
     print(args)
 
+    # It alerts the user to adjust their settings if they want to use both finetuning and distillation together.
     if args.distillation_type != 'none' and args.finetune and not args.eval:
         raise NotImplementedError("Finetuning with distillation not yet supported")
 
+    # Allow the model and data to be easily transferred to the specified device for training or evaluation.
     device = torch.device(args.device)
 
     # fix the seed for reproducibility
@@ -186,11 +191,14 @@ def main(args):
     np.random.seed(seed)
     # random.seed(seed)
 
+    # Used in PyTorch to optimize the performance of convolutional operations on GPUs, particularly when using NVIDIA's cuDNN library.
     cudnn.benchmark = True
 
+    # Creating and loading the training and validation datasets for the model
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
     dataset_val, _ = build_dataset(is_train=False, args=args)
 
+    # Setting up data sampling and loading for both training and validation datasets in a distributed training context.
     if True:  # args.distributed:
         num_tasks = utils.get_world_size()
         global_rank = utils.get_rank()
@@ -233,6 +241,8 @@ def main(args):
 
     mixup_fn = None
     mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
+
+    # Configuring data augmentation strategies and preparing the model for training.
     if mixup_active:
         print('standard mix up')
         mixup_fn = Mixup(
@@ -244,6 +254,15 @@ def main(args):
 
     print(f"Creating model: {args.arch}")
 
+    # Instantiating different architectures of the GFNet (a type of vision transformer) based on the user-specified argument args.arch.
+    # GFNet Variants:
+    # gfnet-xs: A smaller version of the GFNet with an embedding dimension of 384 and a depth of 12 layers.
+    # gfnet-ti: Another small version with a smaller embedding dimension of 256 but the same depth as gfnet-xs.
+    # gfnet-s: A standard version with an embedding dimension of 384, a depth of 19 layers, and a dropout rate (drop_path_rate) of 0.15.
+    # gfnet-b: A larger version with an embedding dimension of 512, depth of 19 layers, and a higher dropout rate of 0.25.
+    # gfnet-h-ti: A pyramid version of GFNet with varying embedding dimensions across four scales, a depth of layers, and a dropout rate of 0.1.
+    # gfnet-h-s: Similar to gfnet-h-ti, but with higher embedding dimensions and a dropout rate of 0.2.
+    # gfnet-h-b: The largest variant with even more depth in the architecture and a dropout rate of 0.4.
     if args.arch == 'gfnet-xs':
         model = GFNet(
             img_size=args.input_size, 
@@ -292,6 +311,8 @@ def main(args):
     else:
         raise NotImplementedError
 
+
+    # Loading a pretrained model checkpoint into the current model architecture if the --finetune argument is specified
     if args.finetune:
         if args.finetune.startswith('https'):
             checkpoint = torch.hub.load_state_dict_from_url(
@@ -344,10 +365,12 @@ def main(args):
                     origin_weight, size=(upsample_h, upsample_w), mode='bicubic', align_corners=True).permute(0, 2, 3, 1).reshape(upsample_h, upsample_w, num_heads, 2)
                 checkpoint_model[name] = new_weight
         model.load_state_dict(checkpoint_model, strict=True)
-
+    # Move the model to the specified device (CPU or GPU) and initializing the exponential moving average (EMA) model, 
+    # which can be useful for stabilizing training.
     model.to(device)
 
     model_ema = None
+    # Set up an Exponential Moving Average (EMA) model if the args.model_ema flag is enabled.
     if args.model_ema:
         # Important to create EMA model after cuda(), DP wrapper, and AMP but before SyncBN and DDP wrapper
         model_ema = ModelEma(
@@ -355,14 +378,17 @@ def main(args):
             decay=args.model_ema_decay,
             device='cpu' if args.model_ema_force_cpu else '',
             resume='')
-
+    # Create a reference to the original model without any distributed data parallel (DDP) wrapping.
     model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
+    
+    # Calculate and prints the number of trainable parameters in the model.
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of params:', n_parameters)
 
+    # Setting up the learning rate for the optimizer and initializing the optimizer itself, along with a loss scaler.
     linear_scaled_lr = args.lr * args.batch_size * utils.get_world_size() / 512.0
     args.lr = linear_scaled_lr
     optimizer = create_optimizer(args, model_without_ddp)
